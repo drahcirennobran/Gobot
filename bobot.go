@@ -5,9 +5,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/drahcirennobran/queue"
 	//"github.com/stianeikeland/go-rpio"
 	"github.com/drahcirennobran/go-rpio-mock"
+	"github.com/drahcirennobran/queue"
 )
 
 var (
@@ -36,6 +36,12 @@ const (
 	ACCBW int = 11
 	DECBW int = 12
 )
+
+type Command struct {
+	Instruction int
+	Iteration   int
+	Pause       float64
+}
 
 func SplitAcceleration(command queue.Command) []queue.Command {
 	splittedCommands := make([]queue.Command, 0)
