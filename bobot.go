@@ -7,19 +7,10 @@ import (
 
 	//"github.com/stianeikeland/go-rpio"
 	"github.com/drahcirennobran/go-rpio-mock"
-	"github.com/drahcirennobran/queue"
 )
 
 var (
-	pause             [][]float64 = [][]float64{{1000, 2}, {500, 2}, {250, 4}, {100, 10}, {50, 20}, {33.3, 33}, {25, 40}, {20, 50}, {16.67, 60}, {14.29, 70}, {12.5, 80}, {11.11, 90}, {10, 100}}
-	pinStepRight                  = rpio.Pin(16) //36
-	pinDirectionRight             = rpio.Pin(20) //38
-	pinDisableRight               = rpio.Pin(21) //40
-	pinStepLeft                   = rpio.Pin(13) //33
-	pinDirectionLeft              = rpio.Pin(19) //35
-	pinDisableLeft                = rpio.Pin(26) //37
-
-	pinVoid = rpio.Pin(31)
+	pause [][]float64 = [][]float64{{1000, 2}, {500, 2}, {250, 4}, {100, 10}, {50, 20}, {33.3, 33}, {25, 40}, {20, 50}, {16.67, 60}, {14.29, 70}, {12.5, 80}, {11.11, 90}, {10, 100}}
 )
 
 const (
@@ -35,6 +26,15 @@ const (
 	DECFW int = 10
 	ACCBW int = 11
 	DECBW int = 12
+
+	pinStepRight      = rpio.Pin(16) //36
+	pinDirectionRight = rpio.Pin(20) //38
+	pinDisableRight   = rpio.Pin(21) //40
+	pinStepLeft       = rpio.Pin(13) //33
+	pinDirectionLeft  = rpio.Pin(19) //35
+	pinDisableLeft    = rpio.Pin(26) //37
+
+	pinVoid = rpio.Pin(31)
 )
 
 type Command struct {
@@ -43,15 +43,25 @@ type Command struct {
 	Pause       float64
 }
 
-func SplitAcceleration(command queue.Command) []queue.Command {
-	splittedCommands := make([]queue.Command, 0)
+func prout() int {
+	return 2
+}
+
+func SplitAcceleration(command Command) []Command {
+	splittedCommands := make([]Command, 0)
 	for i, totalTicks := 0, 0; pause[i][0] >= command.Pause && i < len(pause) && totalTicks < command.Iteration; i, totalTicks = i+1, totalTicks+int(pause[i][1]) {
-		splittedCommands = append(splittedCommands, queue.Command{0, int(pause[i][1]), pause[i][0]})
-		fmt.Printf("i=%d ; %d pause de %f\n", i, int(pause[i][1]), pause[i][0])
+		var ticks int
+		if totalTicks+int(pause[i][1]) < command.Iteration && pause[i][0] > command.Pause {
+			ticks = int(pause[i][1])
+		} else {
+			ticks = command.Iteration - totalTicks
+		}
+		splittedCommands = append(splittedCommands, Command{0, ticks, pause[i][0]})
+		fmt.Printf("i=%d ; %d ticks, pause de %f (totalticks=%d)\n", i, ticks, pause[i][0], totalTicks)
 	}
 	return splittedCommands
 }
-func processSmoothCommand(smoothCmdChan chan queue.Command, cmdChan chan queue.Command) {
+func processSmoothCommand(smoothCmdChan chan Command, cmdChan chan Command) {
 	for {
 		command := <-smoothCmdChan
 		switch command.Instruction {
@@ -60,7 +70,7 @@ func processSmoothCommand(smoothCmdChan chan queue.Command, cmdChan chan queue.C
 			accelerationCommands := SplitAcceleration(command)
 			println("accelerationCommands size %d", len(accelerationCommands))
 			for _, splittedCommand := range accelerationCommands {
-				cmdChan <- queue.Command{FW, splittedCommand.Iteration, splittedCommand.Pause}
+				cmdChan <- Command{FW, splittedCommand.Iteration, splittedCommand.Pause}
 			}
 		case DECFW:
 			fmt.Printf("DECFW %d\n", command.Iteration)
@@ -73,33 +83,33 @@ func processSmoothCommand(smoothCmdChan chan queue.Command, cmdChan chan queue.C
 		}
 	}
 }
-func processCommand(cmdChan chan queue.Command, leftChan chan queue.Command, rightChan chan queue.Command) {
+func processCommand(cmdChan chan Command, leftChan chan Command, rightChan chan Command) {
 	for {
 		command := <-cmdChan
 		switch command.Instruction {
 		case FW:
 			fmt.Printf("FW %d ticks, pause %f\n", command.Iteration, command.Pause)
-			leftChan <- queue.Command{CW, command.Iteration, command.Pause}
-			rightChan <- queue.Command{CCW, command.Iteration, command.Pause}
+			leftChan <- Command{CW, command.Iteration, command.Pause}
+			rightChan <- Command{CCW, command.Iteration, command.Pause}
 		case BW:
 			fmt.Printf("BW %d ticks, pause %f\n", command.Iteration, command.Pause)
-			leftChan <- queue.Command{CCW, command.Iteration, command.Pause}
-			rightChan <- queue.Command{CW, command.Iteration, command.Pause}
+			leftChan <- Command{CCW, command.Iteration, command.Pause}
+			rightChan <- Command{CW, command.Iteration, command.Pause}
 		case TL:
 			fmt.Printf("TL %d\n", command.Iteration)
-			leftChan <- queue.Command{CCW, command.Iteration, command.Pause}
-			rightChan <- queue.Command{CCW, command.Iteration, command.Pause}
+			leftChan <- Command{CCW, command.Iteration, command.Pause}
+			rightChan <- Command{CCW, command.Iteration, command.Pause}
 		case TR:
 			fmt.Printf("TR %d\n", command.Iteration)
-			leftChan <- queue.Command{CW, command.Iteration, command.Pause}
-			rightChan <- queue.Command{CW, command.Iteration, command.Pause}
+			leftChan <- Command{CW, command.Iteration, command.Pause}
+			rightChan <- Command{CW, command.Iteration, command.Pause}
 		default:
 			fmt.Printf("unknown command %d\n", command.Instruction)
 		}
 	}
 }
 
-func processWheel(side int, c chan queue.Command) {
+func processWheel(side int, c chan Command) {
 	for {
 		command := <-c
 
@@ -157,18 +167,18 @@ func main() {
 	pinDisableRight.Low()
 	pinDisableLeft.Low()
 
-	smoothCommandChan := make(chan queue.Command)
-	commandChan := make(chan queue.Command)
-	leftWhellChan := make(chan queue.Command)
-	rightWhellChan := make(chan queue.Command)
+	smoothCommandChan := make(chan Command)
+	commandChan := make(chan Command)
+	leftWhellChan := make(chan Command)
+	rightWhellChan := make(chan Command)
 
 	go processSmoothCommand(smoothCommandChan, commandChan)
 	go processCommand(commandChan, leftWhellChan, rightWhellChan)
 	go processWheel(LEFT, leftWhellChan)
 	go processWheel(RIGHT, rightWhellChan)
 
-	smoothCommandChan <- queue.Command{ACCFW, 10, 50}
-	//smoothCommandChan <- queue.Command{ACCFW, 10, 5}
+	smoothCommandChan <- Command{ACCFW, 110, 50}
+	//smoothCommandChan <- Command{ACCFW, 10, 5}
 	fmt.Scanln(&input)
 
 	pinDisableRight.High()
