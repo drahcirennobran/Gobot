@@ -14,6 +14,10 @@ var (
 )
 
 const (
+	wheelSize    = 0.1
+	stepPerTurn  = 200
+	wheelSpacing = 0.2
+
 	LEFT  int = 1
 	RIGHT int = 2
 	CW    int = 3
