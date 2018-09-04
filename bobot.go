@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	//"github.com/stianeikeland/go-rpio"
-	"github.com/drahcirennobran/go-rpio-mock"
+	"github.com/stianeikeland/go-rpio"
+	//"github.com/drahcirennobran/go-rpio-mock"
 )
 
 var (
@@ -16,6 +16,7 @@ var (
 const (
 	wheelSize    = 0.1
 	stepPerTurn  = 200
+	ticksPerStep = 16
 	wheelSpacing = 0.2
 
 	LEFT  int = 1
@@ -26,10 +27,6 @@ const (
 	BW    int = 6
 	TL    int = 7
 	TR    int = 8
-	ACCFW int = 9
-	DECFW int = 10
-	ACCBW int = 11
-	DECBW int = 12
 
 	pinStepRight      = rpio.Pin(16) //36
 	pinDirectionRight = rpio.Pin(20) //38
@@ -45,12 +42,26 @@ type Command struct {
 	Instruction int
 	Iteration   int
 	Pause       float64
+	//Speed       float64
+	//DurationMs  int32
 }
 
-func prout() int {
-	return 2
+func initGpio() {
+	pinStepRight.Output()
+	pinDirectionRight.Output()
+	pinDisableRight.Output()
+	pinStepLeft.Output()
+	pinDirectionLeft.Output()
+	pinDisableLeft.Output()
 }
-
+func enableWheels() {
+	pinDisableRight.Low()
+	pinDisableLeft.Low()
+}
+func disableWheels() {
+	pinDisableRight.High()
+	pinDisableLeft.High()
+}
 func SplitAcceleration(command Command) []Command {
 	splittedCommands := make([]Command, 0)
 	for i, totalTicks := 0, 0; pause[i][0] >= command.Pause && i < len(pause) && totalTicks < command.Iteration; i, totalTicks = i+1, totalTicks+int(pause[i][1]) {
@@ -61,7 +72,7 @@ func SplitAcceleration(command Command) []Command {
 			ticks = command.Iteration - totalTicks
 		}
 		splittedCommands = append(splittedCommands, Command{0, ticks, pause[i][0]})
-		fmt.Printf("i=%d ; %d ticks, pause de %f (totalticks=%d)\n", i, ticks, pause[i][0], totalTicks)
+		//fmt.Printf("i=%d ; %d ticks, pause de %f (totalticks=%d)\n", i, ticks, pause[i][0], totalTicks)
 	}
 	return splittedCommands
 }
@@ -69,21 +80,20 @@ func processSmoothCommand(smoothCmdChan chan Command, cmdChan chan Command) {
 	for {
 		command := <-smoothCmdChan
 		switch command.Instruction {
-		case ACCFW:
-			fmt.Printf("ACCFW %d %f\n", command.Iteration, command.Pause)
+		case FW:
+			fmt.Printf("smoothCommand : FW %d %f\n", command.Iteration, command.Pause)
 			accelerationCommands := SplitAcceleration(command)
-			println("accelerationCommands size %d", len(accelerationCommands))
 			for _, splittedCommand := range accelerationCommands {
 				cmdChan <- Command{FW, splittedCommand.Iteration, splittedCommand.Pause}
 			}
-		case DECFW:
-			fmt.Printf("DECFW %d\n", command.Iteration)
-		case ACCBW:
-			fmt.Printf("ACCBW %d\n", command.Iteration)
-		case DECBW:
-			fmt.Printf("DECBW %d\n", command.Iteration)
+		case BW:
+			fmt.Printf("smoothCommand : BW %d\n", command.Iteration)
+		case TL:
+			fmt.Printf("smoothCommand : TL %d\n", command.Iteration)
+		case TR:
+			fmt.Printf("smoothCommand : TR %d\n", command.Iteration)
 		default:
-			fmt.Printf("unknown command %d\n", command.Instruction)
+			fmt.Printf("processSmoothCommand unknown command %d\n", command.Instruction)
 		}
 	}
 }
@@ -108,7 +118,7 @@ func processCommand(cmdChan chan Command, leftChan chan Command, rightChan chan 
 			leftChan <- Command{CW, command.Iteration, command.Pause}
 			rightChan <- Command{CW, command.Iteration, command.Pause}
 		default:
-			fmt.Printf("unknown command %d\n", command.Instruction)
+			fmt.Printf("processCommand unknown command %d\n", command.Instruction)
 		}
 	}
 }
@@ -133,13 +143,14 @@ func processWheel(side int, c chan Command) {
 		case CW:
 			//fmt.Printf("CW %d %f\n", command.Iteration, command.Pause)
 			pinDirection.High()
+			steppersTicks(pinStep, command.Iteration, command.Pause)
 		case CCW:
 			//fmt.Printf("CCW %d %f\n", command.Iteration, command.Pause)
 			pinDirection.Low()
+			steppersTicks(pinStep, command.Iteration, command.Pause)
 		default:
-			fmt.Printf("unknown command %d\n", command.Instruction)
+			fmt.Printf("processWheel unknown command %d\n", command.Instruction)
 		}
-		steppersTicks(pinStep, command.Iteration, command.Pause)
 	}
 }
 
@@ -152,7 +163,6 @@ func steppersTicks(pin rpio.Pin, iterations int, pause float64) {
 		time.Sleep(time.Microsecond * time.Duration(pause))
 	}
 }
-
 func main() {
 	if err := rpio.Open(); err != nil {
 		fmt.Println(err)
@@ -161,30 +171,25 @@ func main() {
 	defer rpio.Close()
 
 	var input string
-	pinStepRight.Output()
-	pinDirectionRight.Output()
-	pinDisableRight.Output()
-	pinStepLeft.Output()
-	pinDirectionLeft.Output()
-	pinDisableLeft.Output()
-
-	pinDisableRight.Low()
-	pinDisableLeft.Low()
+	initGpio()
+	enableWheels()
 
 	smoothCommandChan := make(chan Command)
 	commandChan := make(chan Command)
-	leftWhellChan := make(chan Command)
-	rightWhellChan := make(chan Command)
+	leftWhellTickChan := make(chan Command)
+	rightWhellTickChan := make(chan Command)
 
 	go processSmoothCommand(smoothCommandChan, commandChan)
-	go processCommand(commandChan, leftWhellChan, rightWhellChan)
-	go processWheel(LEFT, leftWhellChan)
-	go processWheel(RIGHT, rightWhellChan)
+	go processCommand(commandChan, leftWhellTickChan, rightWhellTickChan)
+	go processWheel(LEFT, leftWhellTickChan)
+	go processWheel(RIGHT, rightWhellTickChan)
 
-	smoothCommandChan <- Command{ACCFW, 110, 50}
-	//smoothCommandChan <- Command{ACCFW, 10, 5}
+	//rightWhellTickChan <- Command{CW, stepPerTurn * ticksPerStep, 250}
+
+	smoothCommandChan <- Command{FW, stepPerTurn * ticksPerStep, 250}
+	//smoothCommandChan <- Command{FW, 10, 5}
+
 	fmt.Scanln(&input)
 
-	pinDisableRight.High()
-	pinDisableLeft.High()
+	disableWheels()
 }
