@@ -10,15 +10,12 @@ import (
 	//"github.com/drahcirennobran/go-rpio-mock"
 )
 
-var (
-	pause [][]float64 = [][]float64{{1000, 2}, {500, 2}, {250, 4}, {100, 10}, {50, 20}, {33.3, 33}, {25, 40}, {20, 50}, {16.67, 60}, {14.29, 70}, {12.5, 80}, {11.11, 90}, {10, 100}}
-)
-
 const (
 	wheelSize_mm = 80
+	whellDist    = 200
 	stepPerTurn  = 200
-	ticksPerStep = 16
-	wheelSpacing = 0.2
+	ticksPerStep = 8
+	vmax         = 50
 
 	LEFT  int = 1
 	RIGHT int = 2
@@ -47,8 +44,9 @@ type Command struct {
 
 type SpeedCommand struct {
 	Instruction int
-	Speed_mmps  int32
-	Duration_ms int32
+	Speed_mmps  int
+	dist_mm     int
+	angle       int
 }
 
 func initGpio() {
@@ -67,40 +65,38 @@ func disableWheels() {
 	pinDisableRight.High()
 	pinDisableLeft.High()
 }
-func SplitAcceleration(command Command) []Command {
-	splittedCommands := make([]Command, 0)
-	for i, totalTicks := 0, 0; pause[i][0] >= command.Pause && i < len(pause) && totalTicks < command.Iteration; i, totalTicks = i+1, totalTicks+int(pause[i][1]) {
-		var ticks int
-		if totalTicks+int(pause[i][1]) < command.Iteration && pause[i][0] > command.Pause {
-			ticks = int(pause[i][1])
-		} else {
-			ticks = command.Iteration - totalTicks
-		}
-		splittedCommands = append(splittedCommands, Command{0, ticks, pause[i][0]})
-		//fmt.Printf("i=%d ; %d ticks, pause de %f (totalticks=%d)\n", i, ticks, pause[i][0], totalTicks)
-	}
-	return splittedCommands
-}
 func processSmoothSpeedCommand(smoothCmdChan chan SpeedCommand, cmdChan chan SpeedCommand) {
 	for {
 		command := <-smoothCmdChan
+		v := command.Speed_mmps
+		if command.Speed_mmps > vmax {
+			v = vmax
+		}
+		speedIncrement := 2
+		stepDist := 10
+		accelDist := command.dist_mm / 2
+		fmt.Printf("accelDist %v\n", accelDist)
+		stepNb := 0
 		switch command.Instruction {
-		case FW:
-			fmt.Printf("smoothCommand : FW speed %v mm/s during %v ms\n", command.Speed_mmps, command.Duration_ms)
-			/*
-				for speed := 1; speed < command.Speed_mmps; speed++ {
-					cmdChan <- SpeedCommand{FW, speed, 100}
-				}
-			*/
-			/*
-				accelerationCommands := SplitAcceleration(command)
-				for _, splittedCommand := range accelerationCommands {
-					cmdChan <- Command{FW, splittedCommand.Iteration, splittedCommand.Pause}
-				}
-			*/
-		case BW:
-			fmt.Printf("smoothCommand : BW speed %v mm/s during %v ms\n", command.Speed_mmps, command.Duration_ms)
-		//TODO RELATIVE_FW from last speed to target speed
+		case FW, BW:
+			fmt.Printf("smoothCommand : %v speed %v mm/s along %v mm\n", command.Instruction, command.Speed_mmps, command.dist_mm)
+			dist := stepDist
+			speed := speedIncrement
+			for ; dist < accelDist && speed < v; dist, speed = dist+stepDist, speed+speedIncrement {
+				//fmt.Printf("speed %v ; stepDist %v ; (dist %v)\n", speed, stepDist, dist)
+				cmdChan <- SpeedCommand{command.Instruction, speed, stepDist, 0}
+				stepNb++
+			}
+			stableDist := command.dist_mm - 2*(dist-stepDist)
+			if stableDist > 0 {
+				//fmt.Printf("speed %v ; dist %v ; \n", speed, stableDist)
+				cmdChan <- SpeedCommand{command.Instruction, speed, stableDist, 0}
+			}
+			for i := 0; i < stepNb; i++ {
+				speed -= speedIncrement
+				//fmt.Printf("speed %v : stepDist %v ; \n", speed, stepDist)
+				cmdChan <- SpeedCommand{command.Instruction, speed, stepDist, 0}
+			}
 		/*
 			case TL:
 						fmt.Printf("smoothCommand : TL %d\n", command.Iteration)
@@ -117,23 +113,23 @@ func processSpeedCommand(cmdChan chan SpeedCommand, leftChan chan SpeedCommand, 
 		command := <-cmdChan
 		switch command.Instruction {
 		case FW:
-			fmt.Printf("FW speed %v mm/s during %v ms\n", command.Speed_mmps, command.Duration_ms)
-			leftChan <- SpeedCommand{CW, command.Speed_mmps, command.Duration_ms}
-			rightChan <- SpeedCommand{CCW, command.Speed_mmps, command.Duration_ms}
+			fmt.Printf("processSpeedCommand FW speed %v mm/s along %v mm\n", command.Speed_mmps, command.dist_mm)
+			leftChan <- SpeedCommand{CW, command.Speed_mmps, command.dist_mm, 0}
+			rightChan <- SpeedCommand{CCW, command.Speed_mmps, command.dist_mm, 0}
 		case BW:
-			fmt.Printf("BW speed %v mm/s during %v ms\n", command.Speed_mmps, command.Duration_ms)
-			leftChan <- SpeedCommand{CCW, command.Speed_mmps, command.Duration_ms}
-			rightChan <- SpeedCommand{CW, command.Speed_mmps, command.Duration_ms}
-		/*
-			case TL:
-				fmt.Printf("TL %d\n", command.Iteration)
-				leftChan <- SpeedCommand{CCW, command.Speed_mmps, command.Duration_ms}
-				rightChan <- SpeedCommand{CCW, command.Speed_mmps, command.Duration_ms}
-			case TR:
-				fmt.Printf("TR %d\n", command.Iteration)
-				leftChan <- SpeedCommand{CW, command.Speed_mmps, command.Duration_ms}
-				rightChan <- SpeedCommand{CW, command.Speed_mmps, command.Duration_ms}
-		*/
+			fmt.Printf("processSpeedCommand BW speed %v mm/s along %v mm\n", command.Speed_mmps, command.dist_mm)
+			leftChan <- SpeedCommand{CCW, command.Speed_mmps, command.dist_mm, 0}
+			rightChan <- SpeedCommand{CW, command.Speed_mmps, command.dist_mm, 0}
+		case TL:
+			fmt.Printf("processSpeedCommand TL speed %v mm/s along %v degrees\n", command.Speed_mmps, command.angle)
+			dist := (math.Pi * whellDist * float64(command.angle)) / 360
+			leftChan <- SpeedCommand{CCW, command.Speed_mmps, int(dist), 0}
+			rightChan <- SpeedCommand{CCW, command.Speed_mmps, int(dist), 0}
+		case TR:
+			dist := (math.Pi * whellDist * float64(command.angle)) / 360
+			fmt.Printf("processSpeedCommand TL speed %v mm/s along %v degrees\n", command.Speed_mmps, command.angle)
+			leftChan <- SpeedCommand{CW, command.Speed_mmps, int(dist), 0}
+			rightChan <- SpeedCommand{CW, command.Speed_mmps, int(dist), 0}
 		default:
 			fmt.Printf("processCommand unknown command %d\n", command.Instruction)
 		}
@@ -160,27 +156,27 @@ func processWheel(side int, c chan SpeedCommand) {
 		case CW:
 			//fmt.Printf("CW %d %f\n", command.Iteration, command.Pause)
 			pinDirection.High()
-			steppersMove(pinStep, command.Speed_mmps, command.Duration_ms)
 		case CCW:
 			//fmt.Printf("CCW %d %f\n", command.Iteration, command.Pause)
 			pinDirection.Low()
-			steppersMove(pinStep, command.Speed_mmps, command.Duration_ms)
 		default:
 			fmt.Printf("processWheel2 unknown command %d\n", command.Instruction)
 		}
+		steppersMove(pinStep, command.Speed_mmps, command.dist_mm)
 	}
 }
 
-func steppersMove(pin rpio.Pin, speed_mmps int32, duration_ms int32) {
-	dist_mm := duration_ms * speed_mmps / 1000
+func steppersMove(pin rpio.Pin, speed_mmps int, dist_mm int) {
 	iterations := float64(stepPerTurn*ticksPerStep*dist_mm) / (math.Pi * wheelSize_mm)
-	pause := float64(500*duration_ms) / iterations
+	pause := 500 * float64(dist_mm) / float64(speed_mmps)
+	//fmt.Printf("speed %v, dist %d\n", speed_mmps, dist_mm)
 
-	steppersTicks(pin, int32(iterations), int32(pause))
+	steppersTicks(pin, int(iterations), int(pause))
 }
 
-func steppersTicks(pin rpio.Pin, iterations int32, pause int32) {
-	for i := int32(0); i < iterations; i++ {
+func steppersTicks(pin rpio.Pin, iterations int, pause int) {
+	//fmt.Printf("iterations %v, pause %v\n", iterations, pause)
+	for i := 0; i < iterations; i++ {
 		//fmt.Printf(".")
 		pin.High()
 		time.Sleep(time.Microsecond * time.Duration(pause))
@@ -209,11 +205,13 @@ func main() {
 	go processWheel(LEFT, leftWhellSpeedChan)
 	go processWheel(RIGHT, rightWhellSpeedChan)
 
-	//rightWhellSpeedChan <- SpeedCommand{CW, 250, 1000}
-	speedCommandChan <- SpeedCommand{FW, 250, 1000}
+	//leftWhellSpeedChan <- SpeedCommand{CW, 10, 60}
+	//speedCommandChan <- SpeedCommand{FW, 10, 100}
 
-	//smoothCommandChan <- Command{FW, stepPerTurn * ticksPerStep, 250}
-	//smoothCommandChan <- Command{FW, 10, 5}
+	//smoothSpeedCommandChan <- SpeedCommand{FW, 100, 500, 0}
+	smoothSpeedCommandChan <- SpeedCommand{TL, 100, 0, 45}
+	//smoothSpeedCommandChan <- SpeedCommand{BW, 100, 500, 0}
+	//speedCommandChan <- SpeedCommand{TR, 40, 0, 45}
 
 	fmt.Scanln(&input)
 
